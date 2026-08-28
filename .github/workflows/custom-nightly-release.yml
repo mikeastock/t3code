@@ -39,7 +39,7 @@ env:
     .github/custom-patches/github-release-cli.patch
   # Extra fix branches, merged in this order after bundled patches.
   PATCH_BRANCHES: |
-    fix/grok-skill-catalog
+    # fix/my-thing
 
 jobs:
   sync_upstream_main:

@@ -53,10 +53,8 @@ git format-patch --stdout origin/main..custom/github-release-cli \
   > .github/custom-patches/github-release-cli.patch
 ```
 
-Current product patch branches:
-
-- `fix/grok-skill-catalog` — [pingdotgg/t3code#7919](https://github.com/pingdotgg/t3code/pull/7919).
-  Populate Grok skills in the `$` / `/` pickers from `grok inspect --json`.
+Current product patch branches: none. `fix/grok-skill-catalog` was dropped once
+upstream nightlies already included `grok inspect` skill discovery.
 
 ## Consume a build
 
