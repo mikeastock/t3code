@@ -1,5 +1,6 @@
 name: Custom nightly
 run-name: Sync upstream and build custom nightly
+# Consume-only fork. Do not open PRs or issues against pingdotgg/t3code.
 
 on:
   schedule:

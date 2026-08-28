@@ -3,6 +3,9 @@
 This fork rebuilds each upstream T3 Code nightly with our patches, then publishes
 desktop installers and a CLI tarball to this repository's GitHub Releases.
 
+Keep this fork consume-only. Never open a pull request, issue, or review on
+`pingdotgg/t3code` from this work. Patch branches stay on this repository.
+
 The workflow is [`.github/workflows/custom-nightly-release.yml`](../../.github/workflows/custom-nightly-release.yml).
 It is modeled on [Fenris159's custom Windows nightly](https://github.com/Fenris159/t3code/blob/main/.github/workflows/custom-nightly-release.yml),
 with Linux, macOS, Windows, and the background-service daemon added.
