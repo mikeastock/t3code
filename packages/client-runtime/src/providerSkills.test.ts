@@ -75,6 +75,12 @@ describe("resolveProviderSkillSourceKind", () => {
         scope: "user",
       }),
     ).toBe("app");
+    expect(
+      resolveProviderSkillSourceKind({
+        path: "/Users/julius/.cursor/plugins/cache/cursor-public/kit/sha/skills/fix-ci/SKILL.md",
+        scope: "plugin",
+      }),
+    ).toBe("app");
   });
 
   it("maps standard scopes to source kinds", () => {
