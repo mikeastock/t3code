@@ -136,10 +136,32 @@ const makeProviderStatusEnvFixture = Effect.fn("makeProviderStatusEnvFixture")(f
     directory: NodeOS.tmpdir(),
     prefix: "cursor-provider-status-env-",
   });
+  const home = yield* fileSystem.makeTempDirectory({
+    directory: NodeOS.tmpdir(),
+    prefix: "cursor-provider-skills-home-",
+  });
+  const workspace = yield* fileSystem.makeTempDirectory({
+    directory: NodeOS.tmpdir(),
+    prefix: "cursor-provider-skills-cwd-",
+  });
   return {
     requestLogPath: path.join(tempDir, "requests.ndjson"),
     wrapperPath: yield* makeMockAgentWithAboutWrapper(),
+    home,
+    workspace,
   };
+});
+
+const writeCursorSkill = Effect.fn("writeCursorSkill")(function* (
+  skillsDir: string,
+  directoryName: string,
+  contents: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const skillDir = path.join(skillsDir, directoryName);
+  yield* fileSystem.makeDirectory(skillDir, { recursive: true });
+  yield* fileSystem.writeFileString(path.join(skillDir, "SKILL.md"), contents);
 });
 
 const makeExitLogFixture = Effect.fn("makeExitLogFixture")(function* (prefix: string) {
@@ -369,6 +391,35 @@ describe("buildCursorProviderSnapshot", () => {
       ],
     });
   });
+
+  it("forwards the skill catalog onto the snapshot", () => {
+    expect(
+      buildCursorProviderSnapshot({
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        cursorSettings: baseCursorSettings,
+        parsed: {
+          version: "2026.04.09-f2b0fcd",
+          status: "ready",
+          auth: { status: "authenticated", type: "Team", label: "Cursor Team Subscription" },
+        },
+        skills: [
+          {
+            name: "deploy",
+            path: "/repo/.cursor/skills/deploy/SKILL.md",
+            enabled: true,
+            scope: "project",
+          },
+        ],
+      }).skills,
+    ).toEqual([
+      {
+        name: "deploy",
+        path: "/repo/.cursor/skills/deploy/SKILL.md",
+        enabled: true,
+        scope: "project",
+      },
+    ]);
+  });
 });
 
 describe("buildCursorCapabilitiesFromConfigOptions", () => {
@@ -447,7 +498,7 @@ describe("checkCursorProviderStatus", () => {
   });
 
   it("passes the injected environment to ACP model discovery", async () => {
-    const { requestLogPath, wrapperPath } = await runNode(makeProviderStatusEnvFixture());
+    const { requestLogPath, wrapperPath, home } = await runNode(makeProviderStatusEnvFixture());
 
     const provider = await runNode(
       checkCursorProviderStatus(
@@ -459,6 +510,7 @@ describe("checkCursorProviderStatus", () => {
         },
         {
           ...process.env,
+          HOME: home,
           T3_ACP_REQUEST_LOG_PATH: requestLogPath,
         },
       ),
@@ -470,7 +522,158 @@ describe("checkCursorProviderStatus", () => {
       "gpt-5.4",
       "claude-opus-4-6",
     ]);
+    expect(provider.skills).toEqual([]);
     await expect(runNode(waitForFileContent(requestLogPath))).resolves.toContain("initialize");
+  });
+
+  it("returns an empty skill catalog when Cursor skill roots are missing", async () => {
+    const { wrapperPath, home } = await runNode(makeProviderStatusEnvFixture());
+
+    const provider = await runNode(
+      checkCursorProviderStatus(
+        {
+          enabled: true,
+          binaryPath: wrapperPath,
+          apiEndpoint: "",
+          customModels: [],
+        },
+        { ...process.env, HOME: home },
+      ),
+    );
+
+    expect(provider.skills).toEqual([]);
+    expect(provider.installed).toBe(true);
+    expect(["ready", "warning"]).toContain(provider.status);
+  });
+
+  it("attaches disabled, project, and plugin skills without changing probe status", async () => {
+    const { wrapperPath, home, workspace, expectedSkills } = await runNode(
+      Effect.gen(function* () {
+        const fixture = yield* makeProviderStatusEnvFixture();
+        const path = yield* Path.Path;
+        const userSkillPath = path.join(
+          fixture.home,
+          ".cursor",
+          "skills",
+          "internal-helper",
+          "SKILL.md",
+        );
+        const projectSkillPath = path.join(
+          fixture.workspace,
+          ".cursor",
+          "skills",
+          "deploy",
+          "SKILL.md",
+        );
+        const pluginSkillPath = path.join(
+          fixture.home,
+          ".cursor",
+          "plugins",
+          "cache",
+          "cursor-public",
+          "kit",
+          "sha1",
+          "skills",
+          "fix-ci",
+          "SKILL.md",
+        );
+        yield* writeCursorSkill(
+          path.join(fixture.home, ".cursor", "skills"),
+          "internal-helper",
+          ["---", "name: internal-helper", "user-invocable: false", "---"].join("\n"),
+        );
+        yield* writeCursorSkill(
+          path.join(fixture.workspace, ".cursor", "skills"),
+          "deploy",
+          ["---", "name: deploy", "description: Deploy the app.", "---"].join("\n"),
+        );
+        yield* writeCursorSkill(
+          path.join(
+            fixture.home,
+            ".cursor",
+            "plugins",
+            "cache",
+            "cursor-public",
+            "kit",
+            "sha1",
+            "skills",
+          ),
+          "fix-ci",
+          ["---", "name: fix-ci", "description: Fix CI.", "---"].join("\n"),
+        );
+        return {
+          ...fixture,
+          expectedSkills: [
+            {
+              name: "deploy",
+              description: "Deploy the app.",
+              path: projectSkillPath,
+              enabled: true,
+              scope: "project",
+            },
+            {
+              name: "fix-ci",
+              description: "Fix CI.",
+              path: pluginSkillPath,
+              enabled: true,
+              scope: "plugin",
+            },
+            {
+              name: "internal-helper",
+              path: userSkillPath,
+              enabled: false,
+              scope: "user",
+            },
+          ],
+        };
+      }),
+    );
+
+    const provider = await runNode(
+      checkCursorProviderStatus(
+        {
+          enabled: true,
+          binaryPath: wrapperPath,
+          apiEndpoint: "",
+          customModels: [],
+        },
+        { ...process.env, HOME: home },
+        workspace,
+      ),
+    );
+
+    expect(provider.skills).toEqual(expectedSkills);
+    expect(provider.installed).toBe(true);
+    expect(["ready", "warning"]).toContain(provider.status);
+  });
+
+  it("does not degrade probe status when skill discovery cannot read HOME", async () => {
+    const { wrapperPath, home } = await runNode(
+      Effect.gen(function* () {
+        const fixture = yield* makeProviderStatusEnvFixture();
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const homeFile = path.join(fixture.home, "not-a-directory");
+        yield* fileSystem.writeFileString(homeFile, "not-a-directory");
+        return { ...fixture, home: homeFile };
+      }),
+    );
+
+    const provider = await runNode(
+      checkCursorProviderStatus(
+        {
+          enabled: true,
+          binaryPath: wrapperPath,
+          apiEndpoint: "",
+          customModels: [],
+        },
+        { ...process.env, HOME: home },
+      ),
+    );
+
+    expect(provider.skills).toEqual([]);
+    expect(provider.installed).toBe(true);
+    expect(["ready", "warning"]).toContain(provider.status);
   });
 });
 
