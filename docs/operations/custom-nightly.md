@@ -8,7 +8,7 @@ Keep this fork consume-only. Never open a pull request, issue, or review on
 
 The workflow is [`.github/workflows/custom-nightly-release.yml`](../../.github/workflows/custom-nightly-release.yml).
 It is modeled on [Fenris159's custom Windows nightly](https://github.com/Fenris159/t3code/blob/main/.github/workflows/custom-nightly-release.yml),
-with Linux, macOS, Windows, and the background-service daemon added.
+with Linux, macOS, and the background-service daemon instead of Windows.
 
 ## What it does
 
@@ -21,7 +21,6 @@ Every hour, and on manual dispatch:
 4. Builds unsigned desktop artifacts:
    - macOS arm64 DMG
    - Linux x64 AppImage
-   - Windows x64 NSIS
 5. Packs the `t3` CLI as `t3-<version>.tgz`.
 6. Publishes a GitHub prerelease. The custom version is
    `upstream_run * 100 + revision`, so it sorts newer than the upstream nightly
@@ -69,10 +68,9 @@ Install the custom build once from
 `T3CODE_DESKTOP_UPDATE_REPOSITORY` is baked in at package time, so later
 nightlies come from this fork. Stay on the nightly update channel.
 
-These artifacts are unsigned. Linux AppImage updates normally. Windows will
-trip SmartScreen. macOS needs a right-click Open on first launch, and
-electron-updater on Mac usually wants a signed build, so treat the Mac app as
-a manual install.
+These artifacts are unsigned. Linux AppImage updates normally. macOS needs a
+right-click Open on first launch, and electron-updater on Mac usually wants a
+signed build, so treat the Mac app as a manual install.
 
 ### Daemon
 
