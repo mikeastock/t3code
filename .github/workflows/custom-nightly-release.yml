@@ -56,9 +56,18 @@ jobs:
         run: |
           set -euo pipefail
           gh auth setup-git
-          gh repo clone "$GITHUB_REPOSITORY" "$RUNNER_TEMP/sync-source" -- \
+          dest="$RUNNER_TEMP/sync-source"
+          attempt=1
+          until gh repo clone "$GITHUB_REPOSITORY" "$dest" -- \
             --filter=blob:none \
-            --no-checkout
+            --no-checkout; do
+            if (( attempt >= 4 )); then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+            rm -rf "$dest"
+          done
 
       - name: Merge upstream main
         shell: bash
@@ -139,9 +148,18 @@ jobs:
         run: |
           set -euo pipefail
           gh auth setup-git
-          gh repo clone "$GITHUB_REPOSITORY" "$RUNNER_TEMP/custom-source" -- \
+          dest="$RUNNER_TEMP/custom-source"
+          attempt=1
+          until gh repo clone "$GITHUB_REPOSITORY" "$dest" -- \
             --filter=blob:none \
-            --no-checkout
+            --no-checkout; do
+            if (( attempt >= 4 )); then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+            rm -rf "$dest"
+          done
 
       - id: prepare
         name: Resolve upstream nightly and apply patches
@@ -302,6 +320,8 @@ jobs:
           apps/server/src/cloud/pinnedRuntime.test.ts
           apps/server/src/provider/Drivers/GrokSkills.test.ts
           apps/server/src/provider/Layers/GrokProvider.test.ts
+          apps/server/src/provider/Drivers/CursorSkills.test.ts
+          apps/server/src/provider/Layers/CursorProvider.test.ts
 
       - name: Build node-pty linux-x64 prebuild
         shell: bash
