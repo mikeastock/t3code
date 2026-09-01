@@ -217,6 +217,47 @@ it.layer(NodeServices.layer)("discoverCursorSkills", (it) => {
     }),
   );
 
+  it.effect("keeps spaced frontmatter titles as display names and token-safe catalog names", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cursor-skills-" });
+      const home = path.join(tempDir, "home");
+
+      yield* writeSkill(
+        path.join(home, ".cursor", "skills"),
+        "create-hook",
+        skillMarkdown({ name: "Create Hook", description: "Make a hook." }),
+      );
+      yield* writeSkill(
+        path.join(home, ".cursor", "skills"),
+        "land it",
+        skillMarkdown({ name: "Land It", description: "Ship the change." }),
+      );
+
+      const skills = yield* discoverCursorSkills({ binaryPath: "cursor-agent" }, { HOME: home });
+
+      assert.deepEqual(skills, [
+        {
+          name: "create-hook",
+          displayName: "Create Hook",
+          path: path.join(home, ".cursor", "skills", "create-hook", "SKILL.md"),
+          enabled: true,
+          scope: "user",
+          description: "Make a hook.",
+        },
+        {
+          name: "land-it",
+          displayName: "Land It",
+          path: path.join(home, ".cursor", "skills", "land it", "SKILL.md"),
+          enabled: true,
+          scope: "user",
+          description: "Ship the change.",
+        },
+      ]);
+    }),
+  );
+
   it.effect("walks nested category folders and falls back to the directory name", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

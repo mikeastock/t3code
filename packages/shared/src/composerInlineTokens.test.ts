@@ -36,6 +36,42 @@ describe("collectComposerInlineTokens", () => {
     expect(collectComposerInlineTokens("Inspect @AGENTS.md")).toEqual([]);
   });
 
+  it("collects quoted skill tokens containing whitespace", () => {
+    expect(collectComposerInlineTokens('Use $"Create Hook" please')).toEqual([
+      {
+        type: "skill",
+        value: "Create Hook",
+        source: '$"Create Hook"',
+        start: 4,
+        end: 18,
+      },
+    ]);
+  });
+
+  it("unescapes quoted skill token content", () => {
+    expect(collectComposerInlineTokens('Use $"Say \\"hi\\"" next')).toEqual([
+      {
+        type: "skill",
+        value: 'Say "hi"',
+        source: '$"Say \\"hi\\""',
+        start: 4,
+        end: 17,
+      },
+    ]);
+  });
+
+  it("collects a terminal skill token when allowed", () => {
+    expect(collectComposerInlineTokens("Use $ui", { allowTerminalSkillTokens: true })).toEqual([
+      {
+        type: "skill",
+        value: "ui",
+        source: "$ui",
+        start: 4,
+        end: 7,
+      },
+    ]);
+  });
+
   it("keeps the delimiter after a token outside its source range", () => {
     const text = "Inspect [package.json](package.json) next";
 

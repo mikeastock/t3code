@@ -9,12 +9,29 @@ export interface ComposerTrigger {
 }
 
 const SIMPLE_MENTION_PATH_REGEX = /^[^\s@"\\]+$/;
+const SIMPLE_SKILL_NAME_REGEX = /^[a-zA-Z][a-zA-Z0-9:_-]*$/;
 
 export function serializeComposerMentionPath(path: string): string {
   if (SIMPLE_MENTION_PATH_REGEX.test(path)) {
     return path;
   }
   return `"${path.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+export function isSimpleComposerSkillName(name: string): boolean {
+  return SIMPLE_SKILL_NAME_REGEX.test(name);
+}
+
+export function serializeComposerSkillToken(name: string): string {
+  const normalized = name.startsWith("$") ? name.slice(1) : name;
+  if (isSimpleComposerSkillName(normalized)) {
+    return `$${normalized}`;
+  }
+  return `$${serializeQuotedComposerValue(normalized)}`;
+}
+
+function serializeQuotedComposerValue(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
 function composerFileLinkBasename(path: string): string {

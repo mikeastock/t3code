@@ -191,7 +191,7 @@ function appendRun(
   return runs;
 }
 
-const SKILL_TOKEN_REGEX = /(^|\s)\$([a-zA-Z][a-zA-Z0-9:_-]*)(?=\s|$)/g;
+const SKILL_TOKEN_REGEX = /(^|\s)\$(?:"((?:\\.|[^"\\])*)"|([a-zA-Z][a-zA-Z0-9:_-]*))(?=\s|$)/g;
 
 function formatSkillLabel(skill: SelectableMarkdownSkill): string {
   const displayName = skill.displayName?.trim();
@@ -225,13 +225,14 @@ function decorateSkillRuns(
     let matched = false;
     for (const match of run.text.matchAll(SKILL_TOKEN_REGEX)) {
       const prefix = match[1] ?? "";
-      const name = match[2] ?? "";
+      const quotedName = match[2];
+      const name = quotedName !== undefined ? quotedName.replace(/\\(.)/g, "$1") : (match[3] ?? "");
       const skill = skillByName.get(name);
       if (!skill) {
         continue;
       }
       const start = (match.index ?? 0) + prefix.length;
-      const end = start + name.length + 1;
+      const end = start + match[0].length - prefix.length;
       if (start > cursor) {
         decorated.push({ ...run, text: run.text.slice(cursor, start) });
       }

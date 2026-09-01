@@ -208,6 +208,31 @@ describe("nativeMarkdownDocumentRuns", () => {
     });
   });
 
+  it("decorates quoted skill names that contain spaces", () => {
+    const node: MarkdownNode = {
+      type: "document",
+      children: [
+        {
+          type: "paragraph",
+          children: [{ type: "text", content: 'Use $"Create Hook" for this.' }],
+        },
+      ],
+    };
+
+    expect(
+      nativeMarkdownDocumentRuns(node, [{ name: "Create Hook", displayName: "Create Hook" }]),
+    ).toEqual([
+      { text: "Use ", role: "body" },
+      {
+        text: '$"Create Hook"',
+        role: "body",
+        skillName: "Create Hook",
+        skillLabel: "Create Hook",
+      },
+      { text: " for this.", role: "body" },
+    ]);
+  });
+
   it("leaves unknown skill-like text unchanged", () => {
     const node: MarkdownNode = {
       type: "document",

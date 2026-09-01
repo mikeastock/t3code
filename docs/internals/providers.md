@@ -31,7 +31,8 @@ the Cursor driver scans the same SKILL.md trees Cursor loads: bundled `~/.cursor
 plugin skills under `~/.cursor/plugins/cache/<marketplace>/<plugin>/<sha>/skills` and
 `~/.cursor/plugins/local/<plugin>/skills`, user `~/.cursor/skills` plus Cursor's compatibility dirs
 (`~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`), then the matching project roots under
-`ServerConfig.cwd`. Later roots win on duplicate names. `user-invocable: false` maps to
+`ServerConfig.cwd`. Later roots win on duplicate names. Catalog `name` is a composer `$` token;
+a spaced frontmatter title is kept on `displayName`. `user-invocable: false` maps to
 `enabled: false`. Discovery is best-effort and never changes probe status. Do not flatten
 `~/.cursor/skills` alone — that misses plugin and bundled skills.
 
