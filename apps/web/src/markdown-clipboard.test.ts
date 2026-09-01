@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { serializeRenderedMarkdownFragment } from "./markdown-clipboard";
+import {
+  serializeMarkdownCodeFence,
+  serializeRenderedMarkdownFragment,
+} from "./markdown-clipboard";
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -106,6 +109,26 @@ describe("serializeRenderedMarkdownFragment", () => {
 
     expect(serializeRenderedMarkdownFragment(asNode(container))).toBe(
       "Hello World (Document template)",
+    );
+  });
+
+  it("copies a rendered mermaid figure as its original fence", () => {
+    const fence = serializeMarkdownCodeFence("flowchart LR\nA-->B", "mermaid");
+    const figure = new FakeElement("FIGURE", [], {
+      "data-markdown-copy": fence,
+    }).append(new FakeElement("SVG").append(new FakeText("A B")));
+    const container = new FakeElement("DIV").append(figure);
+
+    expect(serializeRenderedMarkdownFragment(asNode(container))).toBe(
+      "```mermaid\nflowchart LR\nA-->B\n```",
+    );
+  });
+});
+
+describe("serializeMarkdownCodeFence", () => {
+  it("lengthens the fence when the source contains a triple-backtick run", () => {
+    expect(serializeMarkdownCodeFence("flowchart LR\n%% ``` in a comment", "mermaid")).toBe(
+      "````mermaid\nflowchart LR\n%% ``` in a comment\n````\n\n",
     );
   });
 });

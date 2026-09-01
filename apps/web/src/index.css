@@ -1810,6 +1810,13 @@ code {
   background: transparent !important;
 }
 
+.chat-markdown .chat-markdown-mermaid-canvas svg {
+  display: block;
+  max-width: none;
+  height: auto;
+  margin: 0 auto;
+}
+
 /* Diagnostics-style tables: row separators only, uppercase headers, and a
    scroll-fade container for horizontal overflow. The root chat-markdown
    wrapping rules (overflow-wrap: anywhere) would let columns shrink to single
