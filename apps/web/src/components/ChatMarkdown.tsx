@@ -106,6 +106,7 @@ import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
+import { isMermaidFenceLanguage, MermaidDiagram } from "./MermaidDiagram";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
 import {
@@ -2405,7 +2406,7 @@ function ChatMarkdown({
 
         const language = extractFenceLanguage(codeBlock.className);
         const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
-        return (
+        const codeFallback = (
           <MarkdownCodeBlock
             code={codeBlock.code}
             language={language}
@@ -2424,6 +2425,17 @@ function ChatMarkdown({
             </RenderErrorBoundary>
           </MarkdownCodeBlock>
         );
+        if (!isStreaming && isMermaidFenceLanguage(language)) {
+          return (
+            <MermaidDiagram
+              code={codeBlock.code}
+              theme={resolvedTheme}
+              fenceTitle={fenceTitle}
+              fallback={codeFallback}
+            />
+          );
+        }
+        return codeFallback;
       },
     };
   }, [
