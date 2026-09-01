@@ -115,7 +115,7 @@ describe("splitPromptIntoComposerSegments", () => {
   it("splits skill tokens followed by whitespace into skill segments", () => {
     expect(splitPromptIntoComposerSegments("Use $review-follow-up please")).toEqual([
       { type: "text", text: "Use " },
-      { type: "skill", name: "review-follow-up" },
+      { type: "skill", name: "review-follow-up", source: "$review-follow-up" },
       { type: "text", text: " please" },
     ]);
   });
@@ -123,6 +123,14 @@ describe("splitPromptIntoComposerSegments", () => {
   it("does not convert an incomplete trailing skill token", () => {
     expect(splitPromptIntoComposerSegments("Use $review-follow-up")).toEqual([
       { type: "text", text: "Use $review-follow-up" },
+    ]);
+  });
+
+  it("splits quoted skill tokens containing whitespace", () => {
+    expect(splitPromptIntoComposerSegments('Use $"Create Hook" please')).toEqual([
+      { type: "text", text: "Use " },
+      { type: "skill", name: "Create Hook", source: '$"Create Hook"' },
+      { type: "text", text: " please" },
     ]);
   });
 
@@ -159,7 +167,7 @@ describe("splitPromptIntoComposerSegments", () => {
     ).toEqual([
       { type: "text", text: "Inspect " },
       { type: "terminal-context", context: null },
-      { type: "skill", name: "review-follow-up" },
+      { type: "skill", name: "review-follow-up", source: "$review-follow-up" },
       { type: "text", text: " after " },
       { type: "mention", path: "AGENTS.md", source: "@AGENTS.md" },
       { type: "text", text: " " },

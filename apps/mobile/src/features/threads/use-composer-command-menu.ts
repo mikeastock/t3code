@@ -3,6 +3,7 @@ import {
   detectComposerTrigger,
   replaceTextRange,
   serializeComposerFileLink,
+  serializeComposerSkillToken,
 } from "@t3tools/shared/composerTrigger";
 import {
   insertRankedSearchResult,
@@ -262,7 +263,7 @@ export function useComposerCommandMenu({
       if (item.type === "path") {
         replacement = `${serializeComposerFileLink(item.path)} `;
       } else if (item.type === "skill") {
-        replacement = `$${item.skill.name} `;
+        replacement = `${serializeComposerSkillToken(item.skill.name)} `;
       } else if (item.type === "slash-command") {
         replacement = `/${item.command} `;
       } else if (item.type === "provider-slash-command") {

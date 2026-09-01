@@ -6,7 +6,10 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { type ServerProviderSkill } from "@t3tools/contracts";
-import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import {
+  serializeComposerFileLink,
+  serializeComposerSkillToken,
+} from "@t3tools/shared/composerTrigger";
 import {
   $applyNodeReplacement,
   $createRangeSelectionFromDom,
@@ -336,7 +339,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
   }
 
   override getTextContent(): string {
-    return `$${this.__skillName}`;
+    return serializeComposerSkillToken(this.__skillName);
   }
 
   override isInline(): true {

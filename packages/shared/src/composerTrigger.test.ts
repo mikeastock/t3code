@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { serializeComposerFileLink, serializeComposerMentionPath } from "./composerTrigger.ts";
+import {
+  serializeComposerFileLink,
+  serializeComposerMentionPath,
+  serializeComposerSkillToken,
+} from "./composerTrigger.ts";
 
 describe("serializeComposerMentionPath", () => {
   it("keeps simple mention paths unquoted", () => {
@@ -13,6 +17,20 @@ describe("serializeComposerMentionPath", () => {
 
   it("escapes quoted mention path content", () => {
     expect(serializeComposerMentionPath('docs/My "File".md')).toBe('"docs/My \\"File\\".md"');
+  });
+});
+
+describe("serializeComposerSkillToken", () => {
+  it("keeps simple skill names unquoted", () => {
+    expect(serializeComposerSkillToken("review-follow-up")).toBe("$review-follow-up");
+  });
+
+  it("quotes skill names containing whitespace", () => {
+    expect(serializeComposerSkillToken("Create Hook")).toBe('$"Create Hook"');
+  });
+
+  it("escapes quoted skill name content", () => {
+    expect(serializeComposerSkillToken('Say "hi"')).toBe('$"Say \\"hi\\""');
   });
 });
 

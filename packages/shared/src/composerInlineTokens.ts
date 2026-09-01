@@ -16,9 +16,12 @@ export type ComposerInlineToken =
 
 export interface CollectComposerInlineTokensOptions {
   readonly preserveTrailingFrom?: ReadonlyArray<ComposerInlineToken>;
+  readonly allowTerminalSkillTokens?: boolean;
 }
 
-const SKILL_TOKEN_REGEX = /(^|\s)\$([a-zA-Z][a-zA-Z0-9:_-]*)(?=\s)/g;
+const SKILL_TOKEN_REGEX = /(^|\s)\$(?:"((?:\\.|[^"\\])*)"|([a-zA-Z][a-zA-Z0-9:_-]*))(?=\s)/g;
+const TERMINAL_SKILL_TOKEN_REGEX =
+  /(^|\s)\$(?:"((?:\\.|[^"\\])*)"|([a-zA-Z][a-zA-Z0-9:_-]*))(?=\s|$)/g;
 const MENTION_TOKEN_REGEX = /(^|\s)@(?:"((?:\\.|[^"\\])*)"|([^\s@"]+))(?=\s)/g;
 /**
  * The label body is bounded rather than `*`. Unbounded, every whitespace in
@@ -100,10 +103,15 @@ export function collectComposerInlineTokens(
 ): ReadonlyArray<ComposerInlineToken> {
   const matches = collectMentionTokens(text);
 
-  for (const match of text.matchAll(SKILL_TOKEN_REGEX)) {
+  const skillTokenRegex = options.allowTerminalSkillTokens
+    ? TERMINAL_SKILL_TOKEN_REGEX
+    : SKILL_TOKEN_REGEX;
+  skillTokenRegex.lastIndex = 0;
+  for (const match of text.matchAll(skillTokenRegex)) {
     const fullMatch = match[0];
     const prefix = match[1] ?? "";
-    const value = match[2] ?? "";
+    const quotedName = match[2];
+    const value = quotedName !== undefined ? quotedName.replace(/\\(.)/g, "$1") : (match[3] ?? "");
     if (!value) {
       continue;
     }

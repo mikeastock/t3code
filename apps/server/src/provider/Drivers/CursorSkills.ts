@@ -21,8 +21,10 @@
  * 7. project: `<cwd>/.cursor/skills`
  *
  * Each root is walked recursively so category folders work. Skill identity is
- * the folder that contains `SKILL.md`, not the category above it. `HOME` /
- * `USERPROFILE` select the user home so tests can isolate Cursor dirs.
+ * the folder that contains `SKILL.md`, not the category above it. Catalog
+ * `name` stays a composer `$` token (`[A-Za-z][A-Za-z0-9:_-]*`); a spaced
+ * frontmatter title becomes `displayName` so the chip can stay one piece.
+ * `HOME` / `USERPROFILE` select the user home so tests can isolate Cursor dirs.
  * `user-invocable: false` (or `userInvocable: false`) maps to `enabled: false`;
  * pickers already filter on `enabled`. Discovery is best-effort: missing
  * roots, unreadable files, or malformed frontmatter never degrade the probe.
@@ -41,6 +43,7 @@ type CursorSkillScope = "bundled" | "plugin" | "user" | "project";
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const SKILL_MARKDOWN = "SKILL.md";
+const COMPOSER_SKILL_TOKEN_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9:_-]*$/;
 
 type SkillFrontmatter =
   | { readonly kind: "missing" }
@@ -81,6 +84,37 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
     enabled: isUserInvocable(record),
     ...(name ? { name } : {}),
     ...(description ? { description } : {}),
+  };
+}
+
+function slugifyComposerSkillTokenName(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) {
+    return "";
+  }
+  return COMPOSER_SKILL_TOKEN_NAME_PATTERN.test(slug) ? slug : `skill-${slug}`;
+}
+
+function resolveCursorSkillIdentity(
+  frontmatterName: string | undefined,
+  directoryName: string,
+): { readonly name: string; readonly displayName?: string } | undefined {
+  const prettyName = frontmatterName?.trim() || directoryName.trim();
+  const tokenName =
+    [frontmatterName, directoryName]
+      .map((value) => value?.trim() ?? "")
+      .find((candidate) => COMPOSER_SKILL_TOKEN_NAME_PATTERN.test(candidate)) ??
+    slugifyComposerSkillTokenName(prettyName);
+  if (!tokenName) {
+    return undefined;
+  }
+  return {
+    name: tokenName,
+    ...(prettyName !== tokenName ? { displayName: prettyName } : {}),
   };
 }
 
@@ -169,18 +203,20 @@ const scanSkillRoot = Effect.fn("scanSkillRoot")(function* (
       continue;
     }
 
-    const name =
-      (frontmatter.kind === "parsed" ? frontmatter.name : undefined) ??
-      path.basename(parentDir).trim();
-    if (!name) {
+    const identity = resolveCursorSkillIdentity(
+      frontmatter.kind === "parsed" ? frontmatter.name : undefined,
+      path.basename(parentDir),
+    );
+    if (!identity) {
       continue;
     }
 
-    skillsByName.set(name, {
-      name,
+    skillsByName.set(identity.name, {
+      name: identity.name,
       path: skillPath,
       enabled: frontmatter.kind === "parsed" ? frontmatter.enabled : true,
       scope: root.scope,
+      ...(identity.displayName ? { displayName: identity.displayName } : {}),
       ...(frontmatter.kind === "parsed" && frontmatter.description
         ? { description: frontmatter.description }
         : {}),

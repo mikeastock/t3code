@@ -19,7 +19,10 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import {
+  serializeComposerFileLink,
+  serializeComposerSkillToken,
+} from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   memo,
@@ -2053,7 +2056,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "skill") {
-        const replacement = `$${item.skill.name} `;
+        const replacement = `${serializeComposerSkillToken(item.skill.name)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,

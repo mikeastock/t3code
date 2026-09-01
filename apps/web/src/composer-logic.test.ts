@@ -252,6 +252,16 @@ describe("expandCollapsedComposerCursor", () => {
       expandedCursorAfterSkill,
     );
   });
+
+  it("maps collapsed quoted skill cursor to expanded text cursor", () => {
+    const text = 'run $"Create Hook" then';
+    const collapsedCursorAfterSkill = "run ".length + 2;
+    const expandedCursorAfterSkill = 'run $"Create Hook" '.length;
+
+    expect(expandCollapsedComposerCursor(text, collapsedCursorAfterSkill)).toBe(
+      expandedCursorAfterSkill,
+    );
+  });
 });
 
 describe("collapseExpandedComposerCursor", () => {
@@ -311,6 +321,16 @@ describe("collapseExpandedComposerCursor", () => {
     const text = "run $review-follow-up then";
     const collapsedCursorAfterSkill = "run ".length + 2;
     const expandedCursorAfterSkill = "run $review-follow-up ".length;
+
+    expect(collapseExpandedComposerCursor(text, expandedCursorAfterSkill)).toBe(
+      collapsedCursorAfterSkill,
+    );
+  });
+
+  it("maps expanded quoted skill cursor back to collapsed cursor", () => {
+    const text = 'run $"Create Hook" then';
+    const collapsedCursorAfterSkill = "run ".length + 2;
+    const expandedCursorAfterSkill = 'run $"Create Hook" '.length;
 
     expect(collapseExpandedComposerCursor(text, expandedCursorAfterSkill)).toBe(
       collapsedCursorAfterSkill,
