@@ -2,9 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   CursorListAvailableModelsResponse,
+  cursorSubagentTypeName,
+  cursorTaskId,
+  cursorTaskIsTerminal,
+  cursorTaskTitle,
+  cursorTaskTypeFromSubagent,
   extractAskQuestions,
   extractPlanMarkdown,
   extractTodosAsPlan,
+  makeCursorTaskAck,
 } from "./CursorAcpExtension.ts";
 
 describe("CursorAcpExtension", () => {
@@ -150,5 +156,34 @@ describe("CursorAcpExtension", () => {
     });
 
     expect(decoded.models[0]?.configOptions?.[0]?.id).toBe("reasoning");
+  });
+
+  it("classifies Cursor shell subagents as monitor tasks and the rest as agents", () => {
+    expect(cursorTaskTypeFromSubagent("shell")).toBe("shell");
+    expect(cursorTaskTypeFromSubagent("explore")).toBeUndefined();
+    expect(cursorTaskTypeFromSubagent("browser_use")).toBeUndefined();
+    expect(cursorTaskTypeFromSubagent({ custom: "reviewer" })).toBeUndefined();
+    expect(cursorSubagentTypeName({ custom: "reviewer" })).toBe("reviewer");
+    expect(cursorSubagentTypeName("  ")).toBeUndefined();
+  });
+
+  it("identifies cursor/task ids, titles, and completion from the documented payload", () => {
+    expect(
+      cursorTaskId({
+        toolCallId: "call-1",
+        description: "Watch CI",
+        agentId: "agent-9",
+      }),
+    ).toBe("agent-9");
+    expect(cursorTaskId({ toolCallId: "call-1", description: "Watch CI" })).toBe("call-1");
+    expect(cursorTaskTitle({ toolCallId: "call-1", prompt: "gh run watch" })).toBe("gh run watch");
+    expect(cursorTaskTitle({ toolCallId: "call-1" })).toBe("Task");
+    expect(cursorTaskIsTerminal({ toolCallId: "call-1", durationMs: 1200 })).toBe(true);
+    expect(cursorTaskIsTerminal({ toolCallId: "call-1" })).toBe(false);
+    expect(makeCursorTaskAck({ toolCallId: "call-1", agentId: "agent-9", durationMs: 40 })).toEqual(
+      {
+        outcome: { outcome: "completed", agentId: "agent-9", durationMs: 40 },
+      },
+    );
   });
 });

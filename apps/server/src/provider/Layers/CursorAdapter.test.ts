@@ -1497,4 +1497,419 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       // hang until the suite timeout instead of failing here.
     }).pipe(TestClock.withLive),
   );
+
+  it.effect("promotes an in-progress execute tool call into a live shell task", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-background-shell");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const ready = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EMIT_BACKGROUND_SHELL: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (
+            runtimeEvents.some((entry) => entry.type === "task.started") &&
+            runtimeEvents.some((entry) => entry.type === "turn.completed")
+          ) {
+            yield* Deferred.succeed(ready, undefined).pipe(Effect.orDie);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "background a long command",
+        attachments: [],
+      });
+      yield* Deferred.await(ready);
+
+      const started = runtimeEvents.filter((event) => event.type === "task.started");
+      assert.lengthOf(started, 1);
+      if (started[0]?.type === "task.started") {
+        assert.equal(started[0].payload.taskType, "shell");
+        assert.equal(String(started[0].payload.taskId), "tool-call-background-shell-1");
+        assert.equal(started[0].payload.description, "sleep 30");
+      }
+      assert.isFalse(
+        runtimeEvents.some(
+          (event) =>
+            event.type === "task.updated" ||
+            event.type === "task.completed" ||
+            (event.type === "item.completed" && event.payload.itemType === "command_execution"),
+        ),
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles a backgrounded execute once Cursor completes the tool call", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-background-shell-complete");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const settled = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EMIT_BACKGROUND_SHELL_THEN_COMPLETE: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (event.type === "task.updated" && event.payload.status === "completed") {
+            yield* Deferred.succeed(settled, undefined).pipe(Effect.orDie);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "background then finish",
+        attachments: [],
+      });
+      yield* Deferred.await(settled);
+
+      const started = runtimeEvents.find((event) => event.type === "task.started");
+      const updated = runtimeEvents.find(
+        (event) => event.type === "task.updated" && event.payload.status === "completed",
+      );
+      assert.isDefined(started);
+      assert.isDefined(updated);
+      if (started?.type === "task.started" && updated?.type === "task.updated") {
+        assert.equal(started.payload.taskType, "shell");
+        assert.equal(String(started.payload.taskId), String(updated.payload.taskId));
+      }
+      assert.isUndefined(runtimeEvents.find((event) => event.type === "task.completed"));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps cursor/task shell notifications onto the monitor task lifecycle", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-task-shell");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const ready = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EMIT_CURSOR_TASK: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (
+            runtimeEvents.some((entry) => entry.type === "task.started") &&
+            runtimeEvents.some((entry) => entry.type === "turn.completed")
+          ) {
+            yield* Deferred.succeed(ready, undefined).pipe(Effect.orDie);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "start a shell task",
+        attachments: [],
+      });
+      yield* Deferred.await(ready);
+
+      const started = runtimeEvents.find((event) => event.type === "task.started");
+      assert.isDefined(started);
+      if (started?.type === "task.started") {
+        assert.equal(started.payload.taskType, "shell");
+        assert.equal(started.payload.description, "Watch the build");
+        assert.equal(started.payload.role, "shell");
+      }
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps cursor/task explore notifications onto an agent task", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-task-explore");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const ready = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EMIT_CURSOR_TASK_AGENT: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (
+            runtimeEvents.some((entry) => entry.type === "task.started") &&
+            runtimeEvents.some((entry) => entry.type === "turn.completed")
+          ) {
+            yield* Deferred.succeed(ready, undefined).pipe(Effect.orDie);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "explore auth",
+        attachments: [],
+      });
+      yield* Deferred.await(ready);
+
+      const started = runtimeEvents.find((event) => event.type === "task.started");
+      assert.isDefined(started);
+      if (started?.type === "task.started") {
+        assert.equal(started.payload.taskType, undefined);
+        assert.equal(started.payload.description, "Explore authentication");
+        assert.equal(started.payload.role, "explore");
+        assert.equal(started.payload.model, "composer-2");
+      }
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("acknowledges cursor/task requests and still emits the task lifecycle", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-task-request");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const ready = yield* Deferred.make<void>();
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const argvLogPath = NodePath.join(tempDir, "argv.txt");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath, { T3_ACP_EMIT_CURSOR_TASK_REQUEST: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (
+            runtimeEvents.some((entry) => entry.type === "task.started") &&
+            runtimeEvents.some((entry) => entry.type === "turn.completed")
+          ) {
+            yield* Deferred.succeed(ready, undefined).pipe(Effect.orDie);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "watch CI as a request",
+        attachments: [],
+      });
+      yield* Deferred.await(ready);
+
+      const started = runtimeEvents.find((event) => event.type === "task.started");
+      assert.isDefined(started);
+      if (started?.type === "task.started") {
+        assert.equal(started.payload.taskType, "shell");
+        assert.equal(started.payload.description, "Watch CI");
+      }
+
+      const requests = yield* waitForJsonLogMatch(
+        requestLogPath,
+        (entry) =>
+          typeof entry.result === "object" &&
+          entry.result !== null &&
+          "outcome" in entry.result &&
+          typeof entry.result.outcome === "object" &&
+          entry.result.outcome !== null &&
+          "outcome" in entry.result.outcome &&
+          entry.result.outcome.outcome === "completed",
+      );
+      assert.isTrue(
+        requests.some(
+          (entry) =>
+            typeof entry.result === "object" &&
+            entry.result !== null &&
+            "outcome" in entry.result &&
+            typeof entry.result.outcome === "object" &&
+            entry.result.outcome !== null &&
+            "outcome" in entry.result.outcome &&
+            entry.result.outcome.outcome === "completed",
+        ),
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("completes a cursor/task notification that already carries durationMs", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-task-complete");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const ready = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EMIT_CURSOR_TASK_COMPLETE: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (
+            runtimeEvents.some((entry) => entry.type === "task.completed") &&
+            runtimeEvents.some((entry) => entry.type === "turn.completed")
+          ) {
+            yield* Deferred.succeed(ready, undefined).pipe(Effect.orDie);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "a finished shell task",
+        attachments: [],
+      });
+      yield* Deferred.await(ready);
+
+      const started = runtimeEvents.find((event) => event.type === "task.started");
+      const completed = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.isDefined(started);
+      assert.isDefined(completed);
+      if (started?.type === "task.started" && completed?.type === "task.completed") {
+        assert.equal(started.payload.taskType, "shell");
+        assert.equal(completed.payload.status, "completed");
+        assert.equal(String(started.payload.taskId), String(completed.payload.taskId));
+      }
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("cancels live shell tasks when the turn is interrupted", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-background-shell-interrupt");
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const taskStarted = yield* Deferred.make<void>();
+      const taskCancelled = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EMIT_BACKGROUND_SHELL: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (event.type === "task.started") {
+            yield* Deferred.succeed(taskStarted, undefined);
+          }
+          if (event.type === "task.updated" && event.payload.status === "cancelled") {
+            yield* Deferred.succeed(taskCancelled, undefined);
+          }
+        }).pipe(Effect.orDie),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+      const sendTurnFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "background then interrupt",
+          attachments: [],
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(taskStarted);
+      yield* adapter.interruptTurn(threadId);
+      yield* Deferred.await(taskCancelled);
+      yield* Fiber.await(sendTurnFiber);
+
+      const updated = runtimeEvents.find(
+        (event) => event.type === "task.updated" && event.payload.status === "cancelled",
+      );
+      assert.isDefined(updated);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
 });

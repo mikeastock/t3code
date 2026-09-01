@@ -54,6 +54,40 @@ export const CursorUpdateTodosRequest = Schema.Struct({
   merge: Schema.Boolean,
 });
 
+/**
+ * Cursor ACP `cursor/task` — documented as a fire-and-forget notification
+ * about a subagent/shell task, but the CLI has also sent it as a request.
+ * Only `toolCallId` is required so a completion-only payload still decodes.
+ */
+export const CursorTaskRequest = Schema.Struct({
+  toolCallId: Schema.String,
+  description: Schema.optional(Schema.String),
+  prompt: Schema.optional(Schema.String),
+  subagentType: Schema.optional(Schema.Unknown),
+  model: Schema.optional(Schema.String),
+  agentId: Schema.optional(Schema.String),
+  durationMs: Schema.optional(Schema.Number),
+});
+export type CursorTaskRequest = typeof CursorTaskRequest.Type;
+
+export const CursorTaskResponse = Schema.Struct({
+  outcome: Schema.Union([
+    Schema.Struct({
+      outcome: Schema.Literal("completed"),
+      agentId: Schema.optional(Schema.String),
+      durationMs: Schema.optional(Schema.Number),
+    }),
+    Schema.Struct({
+      outcome: Schema.Literal("rejected"),
+      reason: Schema.optional(Schema.String),
+    }),
+    Schema.Struct({
+      outcome: Schema.Literal("cancelled"),
+    }),
+  ]),
+});
+export type CursorTaskResponse = typeof CursorTaskResponse.Type;
+
 const CursorAvailableModel = Schema.Struct({
   value: Schema.String,
   name: Schema.String,
@@ -110,4 +144,60 @@ export function extractTodosAsPlan(params: typeof CursorUpdateTodosRequest.Type)
     return [{ step, status }];
   });
   return { plan };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Named Cursor subagent types that are watch loops, not Agents-panel work. */
+const CURSOR_SHELL_SUBAGENT_TYPES: ReadonlySet<string> = new Set(["shell"]);
+
+export function cursorSubagentTypeName(subagentType: unknown): string | undefined {
+  if (typeof subagentType === "string") {
+    const trimmed = subagentType.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (isRecord(subagentType) && typeof subagentType.custom === "string") {
+    const trimmed = subagentType.custom.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * `shell` maps onto T3's monitor bucket (`MONITOR_TASK_TYPES`). Every other
+ * Cursor subagent type is left untyped so ingestion classifies it as an agent.
+ */
+export function cursorTaskTypeFromSubagent(subagentType: unknown): string | undefined {
+  const name = cursorSubagentTypeName(subagentType);
+  return name !== undefined && CURSOR_SHELL_SUBAGENT_TYPES.has(name) ? "shell" : undefined;
+}
+
+export function cursorTaskId(params: CursorTaskRequest): string {
+  const agentId = params.agentId?.trim();
+  if (agentId) {
+    return agentId;
+  }
+  return params.toolCallId.trim();
+}
+
+export function cursorTaskTitle(params: CursorTaskRequest): string {
+  return params.description?.trim() || params.prompt?.trim() || "Task";
+}
+
+/** `durationMs` is how Cursor marks a finished task on this notification. */
+export function cursorTaskIsTerminal(params: CursorTaskRequest): boolean {
+  return typeof params.durationMs === "number" && Number.isFinite(params.durationMs);
+}
+
+export function makeCursorTaskAck(params: CursorTaskRequest): CursorTaskResponse {
+  const durationMs = params.durationMs;
+  return {
+    outcome: {
+      outcome: "completed",
+      ...(params.agentId?.trim() ? { agentId: params.agentId.trim() } : {}),
+      ...(typeof durationMs === "number" && Number.isFinite(durationMs) ? { durationMs } : {}),
+    },
+  };
 }
