@@ -18,6 +18,13 @@ const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
+const emitBackgroundShell = process.env.T3_ACP_EMIT_BACKGROUND_SHELL === "1";
+const emitBackgroundShellThenComplete =
+  process.env.T3_ACP_EMIT_BACKGROUND_SHELL_THEN_COMPLETE === "1";
+const emitCursorTask = process.env.T3_ACP_EMIT_CURSOR_TASK === "1";
+const emitCursorTaskAgent = process.env.T3_ACP_EMIT_CURSOR_TASK_AGENT === "1";
+const emitCursorTaskRequest = process.env.T3_ACP_EMIT_CURSOR_TASK_REQUEST === "1";
+const emitCursorTaskComplete = process.env.T3_ACP_EMIT_CURSOR_TASK_COMPLETE === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiExitPlanMode = process.env.T3_ACP_EMIT_XAI_EXIT_PLAN_MODE === "1";
 const emitXAiPlanMdWrite = process.env.T3_ACP_EMIT_XAI_PLAN_MD_WRITE === "1";
@@ -855,6 +862,80 @@ const program = Effect.gen(function* () {
           },
         });
 
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitBackgroundShell || emitBackgroundShellThenComplete) {
+        const toolCallId = "tool-call-background-shell-1";
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: "Terminal",
+            kind: "execute",
+            status: "pending",
+            rawInput: { command: ["sleep", "30"] },
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            status: "in_progress",
+          },
+        });
+        if (emitBackgroundShellThenComplete) {
+          yield* Effect.sleep("50 millis");
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              kind: "execute",
+              status: "completed",
+              rawOutput: { exitCode: 0, stdout: "done\n", stderr: "" },
+            },
+          });
+        }
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitCursorTask || emitCursorTaskAgent || emitCursorTaskComplete) {
+        const payload = emitCursorTaskComplete
+          ? {
+              toolCallId: "cursor-task-shell-1",
+              description: "Tailed the build log",
+              prompt: "tail -f build.log",
+              subagentType: "shell",
+              durationMs: 1200,
+            }
+          : emitCursorTaskAgent
+            ? {
+                toolCallId: "cursor-task-explore-1",
+                description: "Explore authentication",
+                prompt: "Find where auth is handled",
+                subagentType: "explore",
+                model: "composer-2",
+              }
+            : {
+                toolCallId: "cursor-task-shell-1",
+                description: "Watch the build",
+                prompt: "tail -f build.log",
+                subagentType: "shell",
+              };
+        yield* agent.client.extNotification("cursor/task", payload);
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitCursorTaskRequest) {
+        yield* agent.client.extRequest("cursor/task", {
+          toolCallId: "cursor-task-request-1",
+          description: "Watch CI",
+          prompt: "gh run watch",
+          subagentType: "shell",
+        });
         return { stopReason: "end_turn" };
       }
 

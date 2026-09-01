@@ -17,7 +17,9 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RuntimeRequestId,
+  RuntimeTaskId,
   type RuntimeMode,
+  type RuntimeTaskStatus,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -62,6 +64,7 @@ import {
 import {
   type AcpSessionMode,
   type AcpSessionModeState,
+  type AcpToolCallState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
@@ -69,10 +72,17 @@ import { applyCursorAcpModelSelection, makeCursorAcpRuntime } from "../acp/Curso
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
+  CursorTaskRequest,
   CursorUpdateTodosRequest,
+  cursorTaskId,
+  cursorTaskIsTerminal,
+  cursorTaskTitle,
+  cursorTaskTypeFromSubagent,
+  cursorSubagentTypeName,
   extractAskQuestions,
   extractPlanMarkdown,
   extractTodosAsPlan,
+  makeCursorTaskAck,
 } from "../acp/CursorAcpExtension.ts";
 import { type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
@@ -122,6 +132,20 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+interface CursorLiveTask {
+  readonly taskId: string;
+  readonly taskType: string | undefined;
+  readonly title: string;
+  readonly role?: string;
+  readonly model?: string;
+  readonly toolUseId?: string;
+  /**
+   * Execute-promoted shells already have a command_execution work-log row.
+   * Settle those with task.updated so we don't add a second narrative row.
+   */
+  readonly settleWithUpdate: boolean;
+}
+
 interface CursorSessionContext {
   readonly threadId: ThreadId;
   session: ProviderSession;
@@ -130,6 +154,7 @@ interface CursorSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
+  readonly liveTasks: Map<string, CursorLiveTask>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
@@ -294,6 +319,36 @@ function applyRequestedSessionConfiguration<E>(input: {
   });
 }
 
+function isExecuteToolCall(toolCall: AcpToolCallState): boolean {
+  return toolCall.kind === "execute" || toolCall.data.kind === "execute";
+}
+
+function executeShellTaskTitle(toolCall: AcpToolCallState): string {
+  const command = toolCall.command?.trim();
+  if (command) {
+    return command;
+  }
+  const detail = toolCall.detail?.trim();
+  if (detail) {
+    return detail;
+  }
+  const title = toolCall.title?.trim();
+  if (title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "ran command") {
+    return title;
+  }
+  return "Shell";
+}
+
+function cursorLiveTaskLinkage(task: CursorLiveTask) {
+  return {
+    ...(task.taskType ? { taskType: task.taskType } : {}),
+    ...(task.title ? { title: task.title } : {}),
+    ...(task.role ? { role: task.role } : {}),
+    ...(task.model ? { model: task.model } : {}),
+    ...(task.toolUseId ? { toolUseId: task.toolUseId } : {}),
+  };
+}
+
 function selectAutoApprovedPermissionOption(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): string | undefined {
@@ -363,6 +418,130 @@ export function makeCursorAdapter(
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+
+    const emitTaskStarted = (ctx: CursorSessionContext, task: CursorLiveTask) =>
+      makeEventStamp().pipe(
+        Effect.flatMap((stamp) =>
+          offerRuntimeEvent({
+            type: "task.started",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: {
+              taskId: RuntimeTaskId.make(task.taskId),
+              description: task.title,
+              ...cursorLiveTaskLinkage(task),
+            },
+          }),
+        ),
+      );
+
+    const emitTaskSettled = (
+      ctx: CursorSessionContext,
+      task: CursorLiveTask,
+      status: RuntimeTaskStatus,
+    ) =>
+      Effect.gen(function* () {
+        const linkage = cursorLiveTaskLinkage(task);
+        const taskId = RuntimeTaskId.make(task.taskId);
+        if (!task.settleWithUpdate && (status === "completed" || status === "failed")) {
+          yield* offerRuntimeEvent({
+            type: "task.completed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { taskId, status, ...linkage },
+          });
+          return;
+        }
+        yield* offerRuntimeEvent({
+          type: "task.updated",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId: ctx.activeTurnId,
+          payload: { taskId, status, ...linkage },
+        });
+      });
+
+    const startLiveTask = (ctx: CursorSessionContext, task: CursorLiveTask) => {
+      if (ctx.liveTasks.has(task.taskId)) {
+        return Effect.void;
+      }
+      ctx.liveTasks.set(task.taskId, task);
+      return emitTaskStarted(ctx, task);
+    };
+
+    const settleLiveTask = (
+      ctx: CursorSessionContext,
+      taskId: string,
+      status: RuntimeTaskStatus,
+    ) => {
+      const task = ctx.liveTasks.get(taskId);
+      if (!task) {
+        return Effect.void;
+      }
+      ctx.liveTasks.delete(taskId);
+      return emitTaskSettled(ctx, task, status);
+    };
+
+    const settleAllLiveTasks = (ctx: CursorSessionContext, status: RuntimeTaskStatus) =>
+      Effect.forEach([...ctx.liveTasks.keys()], (taskId) => settleLiveTask(ctx, taskId, status), {
+        discard: true,
+      });
+
+    const syncExecuteShellTask = (ctx: CursorSessionContext, toolCall: AcpToolCallState) => {
+      if (!isExecuteToolCall(toolCall)) {
+        return Effect.void;
+      }
+      const taskId = toolCall.toolCallId;
+      if (toolCall.status === "completed" || toolCall.status === "failed") {
+        return settleLiveTask(ctx, taskId, toolCall.status === "failed" ? "failed" : "completed");
+      }
+      if (toolCall.status !== "inProgress") {
+        return Effect.void;
+      }
+      return startLiveTask(ctx, {
+        taskId,
+        taskType: "shell",
+        title: executeShellTaskTitle(toolCall),
+        toolUseId: taskId,
+        settleWithUpdate: true,
+      });
+    };
+
+    const handleCursorTask = (ctx: CursorSessionContext | undefined, params: CursorTaskRequest) => {
+      if (!ctx) {
+        return Effect.void;
+      }
+      const taskId = cursorTaskId(params);
+      if (taskId.length === 0) {
+        return Effect.void;
+      }
+      const alreadyLive = ctx.liveTasks.has(taskId);
+      const title = cursorTaskTitle(params);
+      const taskType = cursorTaskTypeFromSubagent(params.subagentType);
+      const role = cursorSubagentTypeName(params.subagentType);
+      const model = params.model?.trim();
+      const toolUseId = params.toolCallId.trim();
+      const start = alreadyLive
+        ? Effect.void
+        : startLiveTask(ctx, {
+            taskId,
+            taskType,
+            title,
+            ...(role ? { role } : {}),
+            ...(model ? { model } : {}),
+            ...(toolUseId.length > 0 ? { toolUseId } : {}),
+            settleWithUpdate: false,
+          });
+      if (!alreadyLive && !cursorTaskIsTerminal(params)) {
+        return start;
+      }
+      return start.pipe(Effect.andThen(settleLiveTask(ctx, taskId, "completed")));
+    };
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -462,6 +641,7 @@ export function makeCursorAdapter(
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        yield* settleAllLiveTasks(ctx, "cancelled");
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -663,6 +843,23 @@ export function makeCursorAdapter(
                   }),
                 ),
             );
+            yield* acp.handleExtNotification("cursor/task", CursorTaskRequest, (params) =>
+              mapExtensionFailure(
+                Effect.gen(function* () {
+                  yield* logNative(input.threadId, "cursor/task", params, "acp.cursor.extension");
+                  yield* handleCursorTask(ctx, params);
+                }),
+              ),
+            );
+            yield* acp.handleExtRequest("cursor/task", CursorTaskRequest, (params) =>
+              mapExtensionFailure(
+                Effect.gen(function* () {
+                  yield* logNative(input.threadId, "cursor/task", params, "acp.cursor.extension");
+                  yield* handleCursorTask(ctx, params);
+                  return makeCursorTaskAck(params);
+                }),
+              ),
+            );
             yield* acp.handleRequestPermission((params) =>
               mapExtensionFailure(
                 Effect.gen(function* () {
@@ -775,6 +972,7 @@ export function makeCursorAdapter(
             notificationFiber: undefined,
             pendingApprovals,
             pendingUserInputs,
+            liveTasks: new Map(),
             turns: [],
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
@@ -847,6 +1045,7 @@ export function makeCursorAdapter(
                         rawPayload: event.rawPayload,
                       }),
                     );
+                    yield* syncExecuteShellTask(ctx, event.toolCall);
                     return;
                   case "ContentDelta":
                     yield* logNative(
@@ -1074,6 +1273,7 @@ export function makeCursorAdapter(
         const ctx = yield* requireSession(threadId);
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        yield* settleAllLiveTasks(ctx, "cancelled");
         yield* Effect.ignore(
           ctx.acp.cancel.pipe(
             Effect.mapError((error) =>
