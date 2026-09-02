@@ -116,7 +116,7 @@ import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
-import { isMermaidFenceLanguage, MermaidDiagram } from "./MermaidDiagram";
+import { isMermaidFenceLanguage, MermaidDiagram, prefetchMermaid } from "./MermaidDiagram";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
 import {
@@ -822,12 +822,14 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  isStreaming,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  isStreaming: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -874,7 +876,13 @@ function MarkdownCodeBlock({
     [],
   );
 
-  return (
+  useEffect(() => {
+    if (isMermaidFenceLanguage(language)) {
+      prefetchMermaid();
+    }
+  }, [language]);
+
+  const block = (
     <div
       className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
@@ -929,6 +937,12 @@ function MarkdownCodeBlock({
       {children}
     </div>
   );
+
+  if (!isStreaming && isMermaidFenceLanguage(language)) {
+    return <MermaidDiagram code={code} theme={theme} fenceTitle={fenceTitle} fallback={block} />;
+  }
+
+  return block;
 }
 
 interface SuspenseShikiCodeBlockProps {
@@ -2695,12 +2709,13 @@ function ChatMarkdown({
 
         const language = extractFenceLanguage(codeBlock.className);
         const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
-        const codeFallback = (
+        return (
           <MarkdownCodeBlock
             code={codeBlock.code}
             language={language}
             fenceTitle={fenceTitle}
             theme={resolvedTheme}
+            isStreaming={isStreaming}
           >
             <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
@@ -2714,17 +2729,6 @@ function ChatMarkdown({
             </RenderErrorBoundary>
           </MarkdownCodeBlock>
         );
-        if (!isStreaming && isMermaidFenceLanguage(language)) {
-          return (
-            <MermaidDiagram
-              code={codeBlock.code}
-              theme={resolvedTheme}
-              fenceTitle={fenceTitle}
-              fallback={codeFallback}
-            />
-          );
-        }
-        return codeFallback;
       },
     };
   }, [
