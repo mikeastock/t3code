@@ -41,7 +41,7 @@ env:
   # Extra fix branches, merged in this order after bundled patches.
   PATCH_BRANCHES: |
     fix/cursor-skill-catalog
-    # fix/my-thing
+    fix/mermaid-timeline
 
 jobs:
   sync_upstream_main:
