@@ -23,19 +23,6 @@ adapter in a child scope. Adapter implementations live beside them in
 [`ProviderAdapter.ts`][adapter]. Read the driver plus its adapter to see how a specific agent's
 transport, config, and event shapes are mapped.
 
-### Cursor skill catalog
-
-The composer `$` picker (and the skill rows in `/`) read `ServerProvider.skills` from the Cursor
-snapshot. Cursor Agent has no `inspect` catalog command, so after a successful `agent about` probe
-the Cursor driver scans the same SKILL.md trees Cursor loads: bundled `~/.cursor/skills-cursor`,
-plugin skills under `~/.cursor/plugins/cache/<marketplace>/<plugin>/<sha>/skills` and
-`~/.cursor/plugins/local/<plugin>/skills`, user `~/.cursor/skills` plus Cursor's compatibility dirs
-(`~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`), then the matching project roots under
-`ServerConfig.cwd`. Later roots win on duplicate names. Catalog `name` is a composer `$` token;
-a spaced frontmatter title is kept on `displayName`. `user-invocable: false` maps to
-`enabled: false`. Discovery is best-effort and never changes probe status. Do not flatten
-`~/.cursor/skills` alone — that misses plugin and bundled skills.
-
 ## Registry and routing
 
 Two registries separate configuration from live processes:
@@ -48,6 +35,10 @@ Two registries separate configuration from live processes:
 
 [`ProviderService`][service] sits on top. It combines the adapter registry with the provider session
 directory to route session and turn operations for a thread, so callers name a thread, not an agent.
+
+`ProviderService.sendTurn` expands [assistant citations](./assistant-citations.md) into quoted
+reference data before dispatching to any adapter. Bound user comments remain distinct from the quoted
+assistant text. Persisted messages keep their serialized links.
 
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.

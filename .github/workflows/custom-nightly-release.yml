@@ -39,9 +39,11 @@ env:
   BUNDLED_PATCHES: |
     .github/custom-patches/github-release-cli.patch
   # Extra fix branches, merged in this order after bundled patches.
+  # 2026-09-03: dropped fix/cursor-skill-catalog (superseded by upstream #9180)
+  # and fix/mermaid-timeline (dropped). Spaced-chip + Cursor background-job
+  # fixes still live on mine/main but need clean rebased branches before they
+  # can be re-added here (old branches bundle the obsolete catalog).
   PATCH_BRANCHES: |
-    fix/cursor-skill-catalog
-    fix/mermaid-timeline
 
 jobs:
   sync_upstream_main:
@@ -320,7 +322,6 @@ jobs:
           apps/server/src/cloud/pinnedRuntime.test.ts
           apps/server/src/provider/Drivers/GrokSkills.test.ts
           apps/server/src/provider/Layers/GrokProvider.test.ts
-          apps/server/src/provider/Drivers/CursorSkills.test.ts
           apps/server/src/provider/Layers/CursorProvider.test.ts
 
   build:

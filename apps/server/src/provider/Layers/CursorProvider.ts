@@ -6,7 +6,6 @@ import type {
   ServerProvider,
   ServerProviderAuth,
   ServerProviderModel,
-  ServerProviderSkill,
   ServerProviderState,
 } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -47,7 +46,6 @@ import {
 } from "../providerMaintenance.ts";
 import * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import { CursorListAvailableModelsResponse } from "../acp/CursorAcpExtension.ts";
-import { discoverCursorSkills } from "../Drivers/CursorSkills.ts";
 
 const decodeCursorListAvailableModelsResponse = Schema.decodeUnknownEffect(
   CursorListAvailableModelsResponse,
@@ -630,7 +628,6 @@ export function buildCursorProviderSnapshot(input: {
   readonly parsed: CursorAboutResult;
   readonly discoveredModels?: ReadonlyArray<ServerProviderModel>;
   readonly discoveryWarning?: string;
-  readonly skills?: ReadonlyArray<ServerProviderSkill>;
 }): ServerProviderDraft {
   const message = joinProviderMessages(input.parsed.message, input.discoveryWarning);
   return buildServerProvider({
@@ -642,7 +639,6 @@ export function buildCursorProviderSnapshot(input: {
       input.cursorSettings.customModels,
       EMPTY_CAPABILITIES,
     ),
-    skills: input.skills ?? [],
     probe: {
       installed: true,
       version: input.parsed.version,
@@ -991,7 +987,6 @@ const runCursorAboutCommand = (cursorSettings: CursorSettings, environment?: Nod
 export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(function* (
   cursorSettings: CursorSettings,
   environment?: NodeJS.ProcessEnv,
-  cwd?: string,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -1061,7 +1056,6 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
   }
 
   const parsed = parseCursorAboutOutput(aboutProbe.success.value);
-  const skills = yield* discoverCursorSkills(cursorSettings, environment ?? process.env, cwd);
   const cursorCliConfigChannel = yield* readCursorCliConfigChannel();
   const parameterizedModelPickerUnsupportedMessage =
     getCursorParameterizedModelPickerUnsupportedMessage({
@@ -1074,7 +1068,6 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       enabled: cursorSettings.enabled,
       checkedAt,
       models: fallbackModels,
-      skills,
       probe: {
         installed: true,
         version: parsed.version,
@@ -1116,7 +1109,6 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
       Option.filter(discoveredModels, (models) => models.length > 0),
       () => [] as const,
     ),
-    skills,
     ...(discoveryWarning ? { discoveryWarning } : {}),
   });
 });

@@ -70,6 +70,8 @@ import { defaultUrlTransform } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
+import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
+import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
 import {
@@ -116,7 +118,6 @@ import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
-import { isMermaidFenceLanguage, MermaidDiagram, prefetchMermaid } from "./MermaidDiagram";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
 import {
@@ -327,13 +328,10 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
 }
 
 /**
- * The default `1.25rem` marker gutter (`.chat-markdown ol`) fits markers up to
- * two characters wide. Once a marker reaches three characters (item 100+),
- * `list-style-position: outside` paints it wider than that gutter and clips
- * the leading character against the item's own overflow. Rather than widening
- * the gutter for every list, only lists whose widest marker is 3+ characters
- * get a wider `--list-gutter`. The width includes a negative marker's minus
- * sign.
+ * The default `1.25rem` marker gutter (`.chat-markdown ol`) fits one-character
+ * markers. Wider markers can extend past it and get clipped by a collapsed
+ * message's overflow. Widen the gutter to fit the widest marker, including a
+ * negative marker's minus sign.
  */
 export function orderedListGutterStyle(
   itemCount: number,
@@ -343,7 +341,7 @@ export function orderedListGutterStyle(
   const firstNumber = Number.isNaN(parsedStart) ? 1 : parsedStart;
   const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
   const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
-  if (markerWidth <= 2) return undefined;
+  if (markerWidth <= 1) return undefined;
   return { "--list-gutter": `${markerWidth + 1}ch` };
 }
 
@@ -387,7 +385,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file"],
+    href: [...(defaultSchema.protocols?.href ?? []), "file", "t3-citation"],
     src: [...(defaultSchema.protocols?.src ?? []), "file"],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
@@ -824,14 +822,12 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
-  isStreaming,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
-  isStreaming: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -878,13 +874,7 @@ function MarkdownCodeBlock({
     [],
   );
 
-  useEffect(() => {
-    if (isMermaidFenceLanguage(language)) {
-      prefetchMermaid();
-    }
-  }, [language]);
-
-  const block = (
+  return (
     <div
       className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
@@ -939,12 +929,6 @@ function MarkdownCodeBlock({
       {children}
     </div>
   );
-
-  if (!isStreaming && isMermaidFenceLanguage(language)) {
-    return <MermaidDiagram code={code} theme={theme} fenceTitle={fenceTitle} fallback={block} />;
-  }
-
-  return block;
 }
 
 interface SuspenseShikiCodeBlockProps {
@@ -2143,6 +2127,7 @@ function ChatMarkdown({
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
   const markdownUrlTransform = useCallback((href: string) => {
+    if (parseAssistantCitationHref(href)) return href;
     if (isWindowsDrivePathHref(href)) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
@@ -2456,6 +2441,8 @@ function ChatMarkdown({
         );
       },
       a({ node, href, children, title: _title, ...props }) {
+        const citation = href ? parseAssistantCitationHref(href) : null;
+        if (citation) return <AssistantCitationChip citation={citation} />;
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
         const fileLinkMeta = normalizedHref
           ? (markdownFileLinkMetaByHref.get(normalizedHref) ??
@@ -2725,7 +2712,6 @@ function ChatMarkdown({
             language={language}
             fenceTitle={fenceTitle}
             theme={resolvedTheme}
-            isStreaming={isStreaming}
           >
             <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>

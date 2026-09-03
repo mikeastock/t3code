@@ -1,266 +1,283 @@
 /**
- * CursorSkills — filesystem discovery of Cursor Agent skills for the `$` picker.
+ * CursorSkills — workspace-aware discovery and native invocation for Cursor.
  *
- * Cursor Agent has no `inspect` (or other) catalog command: `agent --help`,
- * `agent about --format json`, `agent plugin`, and ACP do not report skills.
- * A flat scan of `~/.cursor/skills` is not enough — that misses bundled
- * skills, plugin skills, and Cursor's compatibility roots. This module walks
- * the same SKILL.md trees Cursor loads, with YAML frontmatter parsed the way
- * ClaudeSkills does.
- *
- * Roots, lowest precedence first (later roots win on duplicate names):
- *
- * 1. bundled: `~/.cursor/skills-cursor`
- * 2. plugin cache: `~/.cursor/plugins/cache/<marketplace>/<plugin>/<sha>/skills`
- *    (marketplaces, plugins, then SHAs, each sorted; later SHA wins)
- * 3. local plugins: `~/.cursor/plugins/local/<plugin>/skills`
- * 4. user compatibility: `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`
- * 5. user: `~/.cursor/skills`
- * 6. project compatibility: `<cwd>/.claude/skills`, `<cwd>/.codex/skills`,
- *    `<cwd>/.agents/skills`
- * 7. project: `<cwd>/.cursor/skills`
- *
- * Each root is walked recursively so category folders work. Skill identity is
- * the folder that contains `SKILL.md`, not the category above it. Catalog
- * `name` stays a composer `$` token (`[A-Za-z][A-Za-z0-9:_-]*`); a spaced
- * frontmatter title becomes `displayName` so the chip can stay one piece.
- * `HOME` / `USERPROFILE` select the user home so tests can isolate Cursor dirs.
- * `user-invocable: false` (or `userInvocable: false`) maps to `enabled: false`;
- * pickers already filter on `enabled`. Discovery is best-effort: missing
- * roots, unreadable files, or malformed frontmatter never degrade the probe.
+ * Cursor discovers Agent Skills recursively from user and project roots but
+ * its ACP command catalog only appears after opening a real session. Scanning
+ * the same roots avoids starting an agent and its MCP servers just to populate
+ * a composer menu.
  *
  * @module provider/Drivers/CursorSkills
  */
 import * as NodeOS from "node:os";
 
-import type { CursorSettings, ServerProviderSkill } from "@t3tools/contracts";
+import type { ServerProviderSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 import { parse as parseYamlDocument } from "yaml";
 
-type CursorSkillScope = "bundled" | "plugin" | "user" | "project";
-
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
-const SKILL_MARKDOWN = "SKILL.md";
-const COMPOSER_SKILL_TOKEN_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9:_-]*$/;
+const SKILL_MENTION_PATTERN = /(^|\s)\$([a-zA-Z][a-zA-Z0-9:_-]*)(?=\s|$)/g;
+const HAS_SKILL_MENTION_PATTERN = /(^|\s)\$[a-zA-Z][a-zA-Z0-9:_-]*(?=\s|$)/;
+const MAX_SKILL_DEPTH = 10;
+const MAX_SKILL_BYTES = FileSystem.Size(1_000_000);
+const MAX_SKILL_SCAN_ENTRIES = 10_000;
+const MAX_SKILL_SCAN_BYTES = FileSystem.Size(8_000_000);
 
-type SkillFrontmatter =
-  | { readonly kind: "missing" }
-  | { readonly kind: "malformed" }
-  | {
-      readonly kind: "parsed";
-      readonly name?: string;
-      readonly description?: string;
-      readonly enabled: boolean;
-    };
-
-function isUserInvocable(record: Record<string, unknown>): boolean {
-  const value = record["user-invocable"] ?? record.userInvocable;
-  return value !== false;
+interface CursorSkillFrontmatter {
+  readonly description?: string;
+  readonly displayName?: string;
+  readonly userInvocationOnly?: boolean;
+  readonly userInvocable?: boolean;
+  readonly cliVisible: boolean;
 }
 
-function parseSkillFrontmatter(contents: string): SkillFrontmatter {
-  const match = FRONTMATTER_PATTERN.exec(contents);
-  if (!match) {
-    return { kind: "missing" };
+interface CursorSkillScanBudget {
+  remainingEntries: number;
+  remainingBytes: bigint;
+  exhausted: boolean;
+  incomplete: boolean;
+}
+
+class CursorSkillsProbeError extends Schema.TaggedErrorClass<CursorSkillsProbeError>()(
+  "CursorSkillsProbeError",
+  {
+    reason: Schema.Literals(["scan-budget-exhausted", "filesystem-error"]),
+    cwd: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    const location = this.cwd === undefined ? "" : ` for '${this.cwd}'`;
+    return `Cursor skill discovery${location} was incomplete (${this.reason}).`;
   }
+}
+
+const orUndefined = <A, R>(
+  effect: Effect.Effect<A, PlatformError.PlatformError, R>,
+  budget?: CursorSkillScanBudget,
+): Effect.Effect<A | undefined, never, R> =>
+  effect.pipe(
+    Effect.map((value): A | undefined => value),
+    Effect.catchTags({
+      PlatformError: (error) => {
+        if (error.reason._tag !== "NotFound" && budget) budget.incomplete = true;
+        return Effect.void.pipe(Effect.as(undefined));
+      },
+    }),
+  );
+
+function parseFrontmatterBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1 ? true : value === 0 ? false : undefined;
+  if (typeof value !== "string") return undefined;
+  switch (value.trim().toLowerCase()) {
+    case "true":
+    case "yes":
+    case "on":
+      return true;
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return undefined;
+  }
+}
+
+function parseSkillFrontmatter(contents: string): CursorSkillFrontmatter | undefined {
+  const match = FRONTMATTER_PATTERN.exec(contents);
+  if (!match) return { cliVisible: true };
 
   let parsed: unknown;
   try {
     parsed = parseYamlDocument(match[1] ?? "");
   } catch {
-    return { kind: "malformed" };
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    return { kind: "malformed" };
-  }
-
-  const record = parsed as Record<string, unknown>;
-  const name = typeof record.name === "string" ? record.name.trim() : "";
-  const description = typeof record.description === "string" ? record.description.trim() : "";
-  return {
-    kind: "parsed",
-    enabled: isUserInvocable(record),
-    ...(name ? { name } : {}),
-    ...(description ? { description } : {}),
-  };
-}
-
-function slugifyComposerSkillTokenName(value: string): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!slug) {
-    return "";
-  }
-  return COMPOSER_SKILL_TOKEN_NAME_PATTERN.test(slug) ? slug : `skill-${slug}`;
-}
-
-function resolveCursorSkillIdentity(
-  frontmatterName: string | undefined,
-  directoryName: string,
-): { readonly name: string; readonly displayName?: string } | undefined {
-  const prettyName = frontmatterName?.trim() || directoryName.trim();
-  const tokenName =
-    [frontmatterName, directoryName]
-      .map((value) => value?.trim() ?? "")
-      .find((candidate) => COMPOSER_SKILL_TOKEN_NAME_PATTERN.test(candidate)) ??
-    slugifyComposerSkillTokenName(prettyName);
-  if (!tokenName) {
     return undefined;
   }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+
+  const record = parsed as Record<string, unknown>;
+  const metadata =
+    typeof record.metadata === "object" && record.metadata !== null
+      ? (record.metadata as Record<string, unknown>)
+      : undefined;
+  const rawSurfaces = metadata?.surfaces;
+  const surfaces = Array.isArray(rawSurfaces)
+    ? rawSurfaces.filter((surface): surface is string => typeof surface === "string")
+    : typeof rawSurfaces === "string"
+      ? rawSurfaces.split(",")
+      : [];
+  const description = typeof record.description === "string" ? record.description.trim() : "";
+  const displayName = typeof record.name === "string" ? record.name.trim() : "";
   return {
-    name: tokenName,
-    ...(prettyName !== tokenName ? { displayName: prettyName } : {}),
+    cliVisible:
+      surfaces.length === 0 || surfaces.some((surface) => surface.trim().toLowerCase() === "cli"),
+    ...(description ? { description } : {}),
+    ...(displayName ? { displayName } : {}),
+    ...(parseFrontmatterBoolean(record["disable-model-invocation"]) === true
+      ? { userInvocationOnly: true }
+      : {}),
+    ...(parseFrontmatterBoolean(record["user-invocable"]) === false
+      ? { userInvocable: false }
+      : {}),
   };
 }
 
-function resolveUserHome(environment: NodeJS.ProcessEnv): string {
-  const fromEnvironment = environment.HOME?.trim() || environment.USERPROFILE?.trim() || "";
-  return fromEnvironment.length > 0 ? fromEnvironment : NodeOS.homedir();
-}
-
-const listPluginSkillRoots = Effect.fn("listPluginSkillRoots")(function* (
-  cursorHome: string,
-): Effect.fn.Return<
-  ReadonlyArray<{ directory: string; scope: CursorSkillScope }>,
-  never,
-  FileSystem.FileSystem | Path.Path
-> {
+const discoverSkillsInRoot = Effect.fn("discoverCursorSkillsInRoot")(function* (input: {
+  readonly directory: string;
+  readonly scope: "user" | "project";
+  readonly budget: CursorSkillScanBudget;
+}): Effect.fn.Return<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const roots: Array<{ directory: string; scope: CursorSkillScope }> = [];
+  const skills: ServerProviderSkill[] = [];
+  if (input.budget.exhausted) return skills;
+  const rootDirectory = yield* orUndefined(fileSystem.realPath(input.directory), input.budget);
+  if (!rootDirectory) return skills;
+  const visitedDirectories = new Set<string>();
 
-  const cacheRoot = path.join(cursorHome, "plugins", "cache");
-  const marketplaces = yield* fileSystem
-    .readDirectory(cacheRoot)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  for (const marketplace of [...marketplaces].sort()) {
-    const marketplacePath = path.join(cacheRoot, marketplace);
-    const plugins = yield* fileSystem
-      .readDirectory(marketplacePath)
-      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-    for (const plugin of [...plugins].sort()) {
-      const pluginPath = path.join(marketplacePath, plugin);
-      const versions = yield* fileSystem
-        .readDirectory(pluginPath)
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-      for (const version of [...versions].sort()) {
-        roots.push({
-          directory: path.join(pluginPath, version, "skills"),
-          scope: "plugin",
+  const visit = Effect.fn("visitCursorSkillDirectory")(function* (
+    directory: string,
+    depth: number,
+  ): Effect.fn.Return<void, never> {
+    if (input.budget.exhausted) return;
+    const resolvedDirectory = yield* orUndefined(fileSystem.realPath(directory), input.budget);
+    if (!resolvedDirectory) {
+      return;
+    }
+    if (
+      visitedDirectories.has(resolvedDirectory) ||
+      (resolvedDirectory !== rootDirectory &&
+        !resolvedDirectory.startsWith(`${rootDirectory}${path.sep}`))
+    ) {
+      return;
+    }
+    visitedDirectories.add(resolvedDirectory);
+
+    const skillPath = path.join(resolvedDirectory, "SKILL.md");
+    const skillInfo = yield* orUndefined(fileSystem.stat(skillPath), input.budget);
+    if (skillInfo?.type === "File") {
+      let frontmatter: CursorSkillFrontmatter | undefined = { cliVisible: true };
+      if (skillInfo.size <= MAX_SKILL_BYTES && skillInfo.size <= input.budget.remainingBytes) {
+        const contents = yield* orUndefined(fileSystem.readFileString(skillPath));
+        if (contents !== undefined) {
+          input.budget.remainingBytes -= skillInfo.size;
+          frontmatter = parseSkillFrontmatter(contents);
+        }
+      }
+      const name = path.basename(resolvedDirectory).trim();
+      if (frontmatter?.cliVisible && name) {
+        skills.push({
+          name,
+          path: skillPath,
+          scope: input.scope,
+          enabled: true,
+          ...(frontmatter.displayName && frontmatter.displayName !== name
+            ? { displayName: frontmatter.displayName }
+            : {}),
+          ...(frontmatter.description ? { description: frontmatter.description } : {}),
+          ...(frontmatter.userInvocationOnly ? { userInvocationOnly: true } : {}),
+          ...(frontmatter.userInvocable === false ? { userInvocable: false } : {}),
         });
       }
     }
-  }
 
-  const localRoot = path.join(cursorHome, "plugins", "local");
-  const localPlugins = yield* fileSystem
-    .readDirectory(localRoot)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  for (const plugin of [...localPlugins].sort()) {
-    roots.push({
-      directory: path.join(localRoot, plugin, "skills"),
-      scope: "plugin",
-    });
-  }
+    const entries = yield* orUndefined(fileSystem.readDirectory(resolvedDirectory), input.budget);
+    if (!entries) {
+      return;
+    }
+    for (const entry of [...entries].sort()) {
+      if (input.budget.remainingEntries === 0) {
+        input.budget.exhausted = true;
+        return;
+      }
+      input.budget.remainingEntries -= 1;
+      const child = path.join(resolvedDirectory, entry);
+      const info = yield* orUndefined(fileSystem.stat(child), input.budget);
+      if (info?.type !== "Directory") continue;
+      if (depth >= MAX_SKILL_DEPTH) {
+        input.budget.exhausted = true;
+        return;
+      }
+      yield* visit(child, depth + 1);
+    }
+  });
 
-  return roots;
+  yield* visit(rootDirectory, 0);
+  return skills;
 });
 
-const scanSkillRoot = Effect.fn("scanSkillRoot")(function* (
-  root: { directory: string; scope: CursorSkillScope },
-  skillsByName: Map<string, ServerProviderSkill>,
-): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const entries = yield* fileSystem
-    .readDirectory(root.directory, { recursive: true })
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-
-  for (const relative of [...entries].sort()) {
-    if (path.basename(relative) !== SKILL_MARKDOWN) {
-      continue;
-    }
-    const parentDir = path.dirname(relative);
-    if (parentDir === "." || parentDir === "") {
-      continue;
-    }
-
-    const skillPath = path.join(root.directory, relative);
-    const contents = yield* fileSystem
-      .readFileString(skillPath)
-      .pipe(Effect.orElseSucceed(() => undefined));
-    if (contents === undefined) {
-      continue;
-    }
-
-    const frontmatter = parseSkillFrontmatter(contents);
-    if (frontmatter.kind === "malformed") {
-      continue;
-    }
-
-    const identity = resolveCursorSkillIdentity(
-      frontmatter.kind === "parsed" ? frontmatter.name : undefined,
-      path.basename(parentDir),
-    );
-    if (!identity) {
-      continue;
-    }
-
-    skillsByName.set(identity.name, {
-      name: identity.name,
-      path: skillPath,
-      enabled: frontmatter.kind === "parsed" ? frontmatter.enabled : true,
-      scope: root.scope,
-      ...(identity.displayName ? { displayName: identity.displayName } : {}),
-      ...(frontmatter.kind === "parsed" && frontmatter.description
-        ? { description: frontmatter.description }
-        : {}),
-    });
-  }
-});
-
-/**
- * Enumerate Cursor skills from bundled, plugin, user, and project roots.
- * Never fails: any filesystem error resolves to an empty list.
- */
-export const discoverCursorSkills = Effect.fn("discoverCursorSkills")(function* (
-  _cursorSettings: Pick<CursorSettings, "binaryPath">,
-  environment: NodeJS.ProcessEnv = process.env,
+const inspectCursorSkills = Effect.fn("inspectCursorSkills")(function* (
   cwd?: string,
-): Effect.fn.Return<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path> {
-  return yield* Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const home = resolveUserHome(environment);
-    const cursorHome = path.join(home, ".cursor");
-    const pluginRoots = yield* listPluginSkillRoots(cursorHome);
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const path = yield* Path.Path;
+  const userHome = environment.HOME?.trim() || environment.USERPROFILE?.trim() || NodeOS.homedir();
+  const rootsBelow = (base: string, scope: "user" | "project") => [
+    { directory: path.join(base, ".cursor", "skills"), scope },
+    { directory: path.join(base, ".agents", "skills"), scope },
+    { directory: path.join(base, ".codex", "skills"), scope },
+    { directory: path.join(base, ".claude", "skills"), scope },
+  ];
+  const roots = [...(cwd ? rootsBelow(cwd, "project") : []), ...rootsBelow(userHome, "user")];
 
-    const roots: ReadonlyArray<{ directory: string; scope: CursorSkillScope }> = [
-      { directory: path.join(cursorHome, "skills-cursor"), scope: "bundled" },
-      ...pluginRoots,
-      { directory: path.join(home, ".claude", "skills"), scope: "user" },
-      { directory: path.join(home, ".codex", "skills"), scope: "user" },
-      { directory: path.join(home, ".agents", "skills"), scope: "user" },
-      { directory: path.join(cursorHome, "skills"), scope: "user" },
-      ...(cwd
-        ? [
-            { directory: path.join(cwd, ".claude", "skills"), scope: "project" as const },
-            { directory: path.join(cwd, ".codex", "skills"), scope: "project" as const },
-            { directory: path.join(cwd, ".agents", "skills"), scope: "project" as const },
-            { directory: path.join(cwd, ".cursor", "skills"), scope: "project" as const },
-          ]
-        : []),
-    ];
-
-    const skillsByName = new Map<string, ServerProviderSkill>();
-    for (const root of roots) {
-      yield* scanSkillRoot(root, skillsByName);
+  const skillsByName = new Map<string, ServerProviderSkill>();
+  const budget: CursorSkillScanBudget = {
+    remainingEntries: MAX_SKILL_SCAN_ENTRIES,
+    remainingBytes: MAX_SKILL_SCAN_BYTES,
+    exhausted: false,
+    incomplete: false,
+  };
+  for (const root of roots) {
+    if (budget.exhausted) break;
+    const skills = yield* discoverSkillsInRoot({ ...root, budget });
+    for (const skill of skills) {
+      if (!skillsByName.has(skill.name)) skillsByName.set(skill.name, skill);
     }
-
-    return [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }).pipe(Effect.orElseSucceed((): ReadonlyArray<ServerProviderSkill> => []));
+  }
+  return {
+    skills: [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name)),
+    failureReason: budget.exhausted
+      ? ("scan-budget-exhausted" as const)
+      : budget.incomplete
+        ? ("filesystem-error" as const)
+        : undefined,
+  };
 });
+
+export const discoverCursorSkills = Effect.fn("discoverCursorSkills")(function* (
+  cwd?: string,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  return (yield* inspectCursorSkills(cwd, environment)).skills;
+});
+
+export const probeCursorSkills = Effect.fn("probeCursorSkills")(function* (
+  cwd?: string,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const inspection = yield* inspectCursorSkills(cwd, environment);
+  if (inspection.failureReason) {
+    return yield* new CursorSkillsProbeError({
+      reason: inspection.failureReason,
+      ...(cwd ? { cwd } : {}),
+    });
+  }
+  return inspection.skills;
+});
+
+/** Cursor invokes Agent Skills with `/name`; T3 composers insert `$name`. */
+export function hasCursorSkillMention(prompt: string): boolean {
+  return HAS_SKILL_MENTION_PATTERN.test(prompt);
+}
+
+export function rewriteCursorSkillMentions(
+  prompt: string,
+  skillNames: ReadonlySet<string>,
+): string {
+  return prompt.replace(SKILL_MENTION_PATTERN, (match, prefix: string, name: string) =>
+    skillNames.has(name) ? `${prefix}/${name}` : match,
+  );
+}

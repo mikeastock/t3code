@@ -31,6 +31,9 @@ Use Share to save a copy or send it to another app. PDFs support page navigation
 PDF links in assistant responses open the same preview. On Android, images open in the image
 viewer and PDFs open the system chooser.
 
+On web and desktop, select a sent PDF or HTML attachment to open it in the file viewer, or use the
+download button beside it to save a copy. Other attached files download when selected.
+
 Select a video attachment before or after sending to play it. Web and desktop use the browser's
 built-in controls. On mobile, videos open in a full-screen player with native playback controls.
 Supported videos show a thumbnail in the conversation and composer.
@@ -51,6 +54,40 @@ converts them to JPEG. The 10 MB image limit applies to the converted photo.
 On mobile, the model picker shows each OpenCode model's upstream provider, such as Anthropic,
 GitHub Copilot, or OpenCode Zen, beneath its name. Search by that provider name to narrow the list
 when starting a thread or changing an existing thread's model.
+
+## Model defaults
+
+T3 Code remembers the last provider, model, and model options you selected and reuses that
+selection for new threads. A model configured in a project's settings overrides the remembered
+selection for that project; resetting the project setting returns it to the remembered selection.
+
+Model options shown as provider defaults remain display values until you choose them in T3 Code.
+T3 Code only sends options you selected explicitly, so an unset reasoning level or service tier can
+still come from the provider's own configuration.
+
+## Quote an assistant response
+
+On web and desktop, select text in an assistant response, then choose **Cite in composer** from the
+menu that appears when you release the selection. This inserts an inline quote chip at your cursor
+and opens an optional comment bubble beside the selected text; press `Enter` or choose **Save** to
+attach the comment, or leave it blank to keep just the quote. You can type before and after the
+chip, such as a quote followed by "what do you mean?". A selection must stay within one response
+and fit in 8,000 characters.
+
+The chip shows your comment when it has one, or a short quote preview otherwise. Use the pencil
+button to add or change the comment, and the remove button to delete the quote and its comment from
+the draft. Copying, reloading, and restoring a [stashed prompt](#prompt-stash) keep each comment
+with its quote, and sending tells the agent which words were quoted and which comment you wrote.
+The quoted text and comment count toward the message limit.
+
+Select a chip in the composer or a sent message to open the source thread, scroll to the response,
+and highlight the quoted passage — including in older history. The
+highlight pulses, holds for a moment, then fades on its own; press `Escape` to stop the navigation
+or clear it early. If the source is unavailable or its text has changed, the saved quote stays
+readable and T3 Code shows a warning.
+
+Mobile shows the full saved quote and its comment in sent messages. It does not offer
+**Cite in composer** or navigation to a quote's source.
 
 ## Images and videos in messages
 
@@ -73,7 +110,8 @@ path** and **Open in file viewer**. These actions are available in expanded prev
 On mobile, touch and hold an inline image or use a preview's **Media actions** menu to see its
 source, copy the path or URL, or choose **Save or share**. Workspace media can open in the file
 viewer from the same menu. Saving downloads a copy only when you request it; it does not change
-how the video buffers during playback.
+how the video buffers during playback. On iOS, touch and hold a file reference in a message to
+copy its full or relative path or open it in the file viewer.
 
 Use Markdown image syntax to embed either kind of media:
 
@@ -98,10 +136,10 @@ are not supported; use the Markdown embed syntax above.
 
 When an agent links to a file it wrote outside the workspace, such as a Markdown report in
 `/tmp`, select the link to open it in the file viewer. The viewer shows the file read-only, with
-rendered Markdown available as usual; it cannot edit files outside the workspace. HTML and PDF
-files outside the workspace open the same way as ones inside it. Because such a file is served on
-its own, an HTML page outside the workspace cannot load scripts, styles, or images from files beside
-it.
+rendered Markdown available as usual; it cannot edit files outside the workspace. The workspace
+file tree stays hidden because it does not describe the open file. HTML and PDF files outside the
+workspace open the same way as ones inside it. Because such a file is served on its own, an HTML
+page outside the workspace cannot load scripts, styles, or images from files beside it.
 
 ## HTML and PDF files in the file viewer
 

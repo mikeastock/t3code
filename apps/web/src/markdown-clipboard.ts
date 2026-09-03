@@ -71,12 +71,6 @@ function codeFenceFor(code: string): string {
   return "`".repeat(Math.max(3, longestRun + 1));
 }
 
-export function serializeMarkdownCodeFence(code: string, infoString: string): string {
-  const normalizedCode = code.replace(/\n$/, "");
-  const fence = codeFenceFor(normalizedCode);
-  return `${fence}${infoString}\n${normalizedCode}\n${fence}\n\n`;
-}
-
 function resolveCodeBlockLanguage(pre: Element): string | null {
   const declared =
     pre.closest("[data-language]")?.getAttribute("data-language") ??
@@ -86,7 +80,9 @@ function resolveCodeBlockLanguage(pre: Element): string | null {
 }
 
 function serializeCodeBlock(pre: Element): string {
-  return serializeMarkdownCodeFence(pre.textContent ?? "", resolveCodeBlockLanguage(pre) ?? "");
+  const code = (pre.textContent ?? "").replace(/\n$/, "");
+  const fence = codeFenceFor(code);
+  return `${fence}${resolveCodeBlockLanguage(pre) ?? ""}\n${code}\n${fence}\n\n`;
 }
 
 function serializeTableCell(cell: Element): string {
@@ -260,6 +256,73 @@ function serializeNode(node: Node): string {
   }
 }
 
+/**
+ * Tracks whether a fragment carries exactly one code block and nothing else a
+ * reader would see.
+ */
+interface SoleCodeBlockScan {
+  pre: Element | null;
+  other: boolean;
+}
+
+function scanForSoleCodeBlock(node: Node, scan: SoleCodeBlockScan): void {
+  for (const child of node.childNodes) {
+    if (scan.other) return;
+    if (child.nodeType === Node.TEXT_NODE) {
+      if ((child.textContent ?? "").trim().length > 0) scan.other = true;
+      continue;
+    }
+    if (child.nodeType !== Node.ELEMENT_NODE) continue;
+    const element = child as Element;
+    // Mirrors serializeNode's order: an element carrying markdown of its own
+    // still contributes it even when its tag is otherwise skipped, as a file
+    // chip rendered as a button does.
+    if (element.hasAttribute("data-markdown-details")) {
+      scan.other = true;
+      continue;
+    }
+    const markdownCopy = element.getAttribute("data-markdown-copy");
+    if (markdownCopy !== null) {
+      if (markdownCopy.trim().length > 0) scan.other = true;
+      continue;
+    }
+    if (isSkippedElement(element)) continue;
+    if (element.tagName === "PRE") {
+      if (scan.pre) scan.other = true;
+      else scan.pre = element;
+      continue;
+    }
+    if (element.tagName === "IMG" || element.tagName === "HR") {
+      scan.other = true;
+      continue;
+    }
+    if (element.tagName === "LI") {
+      // serializeListItem emits a marker ("- ", "1. ", "[x] ") for every item,
+      // so an item that does not hold the block carries content of its own even
+      // when it renders no text. An item that wraps the block is just the
+      // structure around it, and a pre-only selection would drop the marker too.
+      const preBeforeItem = scan.pre;
+      scanForSoleCodeBlock(element, scan);
+      if (!scan.other && scan.pre === preBeforeItem) scan.other = true;
+      continue;
+    }
+    scanForSoleCodeBlock(element, scan);
+  }
+}
+
+/**
+ * A drag that ends on a block's final newline pulls the closing `pre` into the
+ * range, so the fragment holds the whole block even though the user only
+ * highlighted code. Re-fencing that pastes stray backticks, so a fragment whose
+ * only visible content is one code block copies as plain code, matching a
+ * selection that never left the `pre`.
+ */
+function soleCodeBlock(container: Node): Element | null {
+  const scan: SoleCodeBlockScan = { pre: null, other: false };
+  scanForSoleCodeBlock(container, scan);
+  return scan.other ? null : scan.pre;
+}
+
 /** Collapses serializer spacing artifacts without touching fenced code content. */
 function tidyMarkdown(markdown: string): string {
   return markdown
@@ -272,6 +335,8 @@ function tidyMarkdown(markdown: string): string {
 }
 
 export function serializeRenderedMarkdownFragment(container: Node): string {
+  const codeBlock = soleCodeBlock(container);
+  if (codeBlock) return (codeBlock.textContent ?? "").replace(/\n$/, "");
   return tidyMarkdown(serializeChildren(container));
 }
 
@@ -326,19 +391,6 @@ export function chatMarkdownClipboardPayload(
     const ancestor = range.commonAncestorContainer;
     const ancestorElement =
       ancestor.nodeType === Node.ELEMENT_NODE ? (ancestor as Element) : ancestor.parentElement;
-    const markdownCopyHost = ancestorElement?.closest("[data-markdown-copy]");
-    if (
-      markdownCopyHost &&
-      markdownCopyHost.contains(range.startContainer) &&
-      markdownCopyHost.contains(range.endContainer)
-    ) {
-      const markdownCopy = markdownCopyHost.getAttribute("data-markdown-copy");
-      if (markdownCopy !== null && markdownCopy.length > 0) {
-        texts.push(tidyMarkdown(markdownCopy));
-        htmls.push(sanitizedHtmlFrom(container));
-        continue;
-      }
-    }
     if (ancestorElement?.closest("pre")) {
       const text = range.toString();
       if (text) {
